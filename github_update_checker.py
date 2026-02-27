@@ -24,8 +24,8 @@ class GithubUpdateChecker:
     def get_instance(cls):
         return cls._instance
 
-    def __init__(self, github_id, app_name, current_version, db_conn:sqlite3.Connection=None, root:tk.Tk=None,
-                 toaster:WindowsToaster=None, check_frequency:int=86400, toast_interval:int=3600, min_check_interval:int=10800):
+    def __init__(self, github_id, app_name, current_version, db_conn:sqlite3.Connection|None=None, root:tk.Tk|None=None,
+                 toaster:WindowsToaster|None=None, check_frequency:int=7*86400, toast_interval:int=86400, min_check_interval:int=86400):
         if GithubUpdateChecker._instance is not None:
             raise RuntimeError("GithubUpdateChecker is a singleton. Use get_instance().")
         GithubUpdateChecker._instance = self
@@ -40,7 +40,6 @@ class GithubUpdateChecker:
         self.github_id = github_id
         self.app_name = app_name
         self.current_version = current_version
-        self.db_conn = db_conn
         self.root = root
         self.toaster = toaster
         self.check_frequency = check_frequency
@@ -54,11 +53,13 @@ class GithubUpdateChecker:
         self._is_checking = False
         self._timer_id = None
 
-        if self.db_conn is None:
+        if db_conn is None:
             CFG_DIR_PATH.mkdir(parents=True, exist_ok=True)
             db_path = CFG_DIR_PATH / f"{self.github_id.replace('/', '_')}.db"
-            self.db_conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.db_conn:sqlite3.Connection = sqlite3.connect(db_path, check_same_thread=False)
             self.own_conn = True
+        else:
+            self.db_conn:sqlite3.Connection = db_conn
             
         self._init_db()
 
@@ -103,7 +104,7 @@ class GithubUpdateChecker:
             logging.debug(f"Fetched latest release info: tag={tag}, html_url={html_url}, remote_ver={remote_ver}")
             return data, remote_ver, html_url, tag
 
-    def show_toast_if_needed(self, toast_interval, toaster: WindowsToaster = None) -> bool:
+    def show_toast_if_needed(self, toast_interval, toaster: WindowsToaster|None = None) -> bool:
         if self.cached_version and self.cached_version != "ERROR":
             if time.time() > self.last_toast + toast_interval:
                 self.last_toast = time.time()
@@ -119,12 +120,15 @@ class GithubUpdateChecker:
         return False
 
     @staticmethod
-    def _emit_toast(tag, html_url, toaster: WindowsToaster):
+    def _emit_toast(tag, html_url, toaster: WindowsToaster|None):
         if not toaster:
             return
         toast = Toast()
         toast.text_fields = ["Update Available", f"New version {tag} is available."]
-        toast.on_activated = lambda _: webbrowser.open(html_url)
+        def on_activated(_):
+            webbrowser.open(html_url)
+
+        toast.on_activated = on_activated
         toaster.show_toast(toast)
 
     def check_now_interactive(self, root_tk):
@@ -144,11 +148,11 @@ class GithubUpdateChecker:
         threading.Thread(target=task, daemon=True).start()
 
     def start(self):
-        if self._timer_id is None and self.root:
+        if self._timer_id is None and self.root is not None:
             self._timer_id = self.root.after(1000, self._periodic_check_loop)
 
     def stop(self):
-        if self._timer_id:
+        if self._timer_id is not None and self.root is not None:
             self.root.after_cancel(self._timer_id)
             self._timer_id = None
 
@@ -188,6 +192,18 @@ class GithubUpdateChecker:
         self._is_checking = True
         
         def task():
+            if self.cached_version and self.cached_version != "ERROR":
+                try:
+                    data = json.loads(self.cached_version)
+                    tag = data.get("tag_name", "")
+                    remote_ver = tag.lstrip("v")
+                    if self.is_newer(remote_ver, self.current_version):
+                        logging.debug("Skipping update check, cached version is already newer.")
+                        self._is_checking = False
+                        return
+                except Exception as e:
+                    logging.warning(f"Could not parse cached version, proceeding with fetch: {e}")
+
             try:
                 data, remote_ver, html_url, tag = self.fetch_latest_release_info()
                 def on_success():

@@ -15,7 +15,12 @@ class LicensesWindow:
             base_path = os.path.dirname(sys.executable)
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
-        json_path = os.path.join(base_path, 'licenses.json')
+            
+        json_path = os.path.join(base_path, '_internal', 'assets', 'licenses.json')
+        if not os.path.exists(json_path):
+            json_path = os.path.join(base_path, '_internal', 'licenses.json')
+        if not os.path.exists(json_path):
+            json_path = os.path.join(base_path, 'licenses.json')
         
         # Main container
         main_frame = tk.Frame(self.window)
